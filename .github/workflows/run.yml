@@ -22,7 +22,7 @@ jobs:
         run: pip install yfinance pandas requests
 
       - name: 신호 체크 실행
-        run: python check.py
+        run: python test_1123.py
 
       - name: 상태 및 매수 기록 저장
         run: |
