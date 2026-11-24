@@ -1,32 +1,36 @@
-name: ETF 5m Monitor
+name: Stock Alert Bot
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
+  # 외부 타이머를 끄고 GitHub 자체 타이머만 쓰고 싶을 때만 아래 2줄 주석(#) 해제
+  # schedule:
+  #   - cron: "*/5 0-6 * * 1-5"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 코드 불러오기
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 파이썬 설치
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: 라이브러리 설치
-        run: pip install yfinance pandas requests
+      - name: Install dependencies
+        run: pip install --upgrade yfinance pandas requests
 
-      - name: 신호 체크 실행
-        run: python test_1123.py
+      - name: Restore & save daily alert cache
+        uses: actions/cache@v4
+        with:
+          path: last_alert.txt
+          key: alert-state-${{ github.run_id }}
+          restore-keys: |
+            alert-state-
 
-      - name: 상태 및 매수 기록 저장
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f last_buy.txt last_status.txt 2>/dev/null || true
-          git diff --staged --quiet || (git commit -m "Update bot status" && git push)
+      - name: Run bot
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python check.py
