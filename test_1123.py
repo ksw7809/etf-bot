@@ -4,7 +4,7 @@ import yfinance as yf
 
 TICKER = "418660.KS"
 NTFY_TOPIC = "ksw7809_bot"
-TARGET_DATE = "2026-10-16"  # 테스트할 날짜로 변경 가능
+TARGET_DATE = "2026-10-20"  # 테스트할 날짜로 변경 가능
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
