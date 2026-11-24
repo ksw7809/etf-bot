@@ -4,7 +4,7 @@ import yfinance as yf
 
 TICKER = "418660.KS"
 NTFY_TOPIC = "ksw7809_bot"
-TARGET_DATE = "2026-11-23"
+TARGET_DATE = "2026-11-04"
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
@@ -46,17 +46,22 @@ def main():
     df_3h["lower_env"] = df_3h["ema"] * (1 - ENV_PERCENT / 100)
     df_3h["rsi_3h"] = calc_tv_rsi(df_3h["Close"], RSI_LEN)
 
-    # 2) 11월 23일 직전 거래일 종가 구하기
-    df_1d = yf.download(TICKER, period="15d", interval="1d", progress=False)
+    # 2) 대상 날짜 직전 거래일 종가 구하기
+    df_1d = yf.download(TICKER, period="60d", interval="1d", progress=False)
     if isinstance(df_1d.columns, pd.MultiIndex):
         df_1d.columns = df_1d.columns.get_level_values(0)
     prev_days = df_1d[df_1d.index.strftime("%Y-%m-%d") < TARGET_DATE]
     prev_close = float(prev_days["Close"].iloc[-1])
 
-    # 3) 11월 23일 5분봉 전체 리플레이
+    # 3) 대상 날짜 5분봉 전체 리플레이
     day_5m = df_5m[df_5m.index.strftime("%Y-%m-%d") == TARGET_DATE]
-    hits = []
+    if day_5m.empty:
+        msg = f"[{TARGET_DATE} 백테스트] 해당 날짜의 5분봉 데이터가 없습니다."
+        print(msg)
+        send_alert(msg)
+        return
 
+    hits = []
     for ts, row in day_5m.iterrows():
         htf_rows = df_3h[df_3h.index < ts.floor("180min")]
         if htf_rows.empty:
@@ -81,12 +86,12 @@ def main():
             )
 
     if hits:
-        msg = f"[11/23 백테스트 성공] 총 {len(hits)}회 포착\n첫 신호: {hits[0]}"
+        msg = f"[{TARGET_DATE} 백테스트 성공] 총 {len(hits)}회 포착\n첫 신호: {hits[0]}"
         print("\n".join(hits))
     else:
         min_rsi_row = day_5m.loc[day_5m["rsi_5m"].idxmin()]
         msg = (
-            f"[11/23 백테스트] 조건 충족 없음\n"
+            f"[{TARGET_DATE} 백테스트] 조건 충족 없음\n"
             f"전일종가:{prev_close:,.0f} | 당일최저 5M_RSI:{min_rsi_row['rsi_5m']:.1f}"
         )
         print(msg)
