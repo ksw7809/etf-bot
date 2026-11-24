@@ -4,7 +4,7 @@ import yfinance as yf
 
 TICKER = "418660.KS"
 NTFY_TOPIC = "ksw7809_bot"
-TARGET_DATE = "2026-11-17"
+TARGET_DATE = "2026-10-15"
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
