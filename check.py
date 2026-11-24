@@ -1,217 +1,213 @@
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import yfinance as yf
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
 
-# ================= [ 사용자 설정 ] =================
-TEST_MODE = True            # 테스트 끝나면 반드시 False로 변경하세요!
-
-TICKER = "418660.KS"        # 야후 파이낸스 종목코드 (3시간봉용)
-NAVER_CODE = "418660"       # 네이버 증권 종목코드 (실시간 5분봉/현재가용)
-NTFY_TOPIC = "ksw7809_bot"  # ntfy 앱 구독 토픽 이름
+TICKER = "418660.KS"
+NTFY_TOPIC = os.environ["NTFY_TOPIC"]
+TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
 RSI_LEN = 14
 RSI_OVERSOLD = 35
+KST = ZoneInfo("Asia/Seoul")
+ALERT_FILE = "last_alert.txt"
 
-RECORD_FILE = "last_buy.txt"
-STATUS_FILE = "last_status.txt"
-# ===================================================
-
-KST = timezone(timedelta(hours=9))
-now = datetime.now(KST)
-today_str = now.strftime("%Y-%m-%d")
 
 def send_alert(msg):
-    url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    try:
-        res = requests.post(url, data=msg.encode("utf-8"), timeout=20)
-        if res.status_code == 200:
-            print("📩 ntfy 알림 전송 성공!")
-        else:
-            print(f"ntfy 응답 오류: {res.status_code}")
-    except Exception as e:
-        print(f"ntfy 전송 실패: {e}")
+    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=msg.encode("utf-8"), timeout=20)
+
 
 def calc_tv_rsi(series, length=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/length, min_periods=length, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/length, min_periods=length, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+
 
 def calc_tv_ema(series, length=20):
     return series.ewm(span=length, adjust=False).mean()
 
-def get_naver_realtime(code):
-    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # 1) 네이버 실시간 현재가 및 전일 종가 조회
-    rt_url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
-    rt_res = requests.get(rt_url, headers=headers, timeout=10).json()
-    item_data = rt_res["result"]["areas"][0]["datas"][0]
-    current_close = float(item_data["nv"])
-    prev_close = float(item_data["sv"])
+def get_etf_ath_text(curr_price):
+    try:
+        df_max = yf.download(TICKER, period="max", interval="1wk", progress=False)
+        if isinstance(df_max.columns, pd.MultiIndex):
+            df_max.columns = df_max.columns.get_level_values(0)
+        ath = max(float(df_max["High"].max()), curr_price)
+        dd_pct = (curr_price - ath) / ath * 100
+        return f"종목 역대고점 대비: {dd_pct:+.2f}% (고점 {ath:,.0f}원)"
+    except Exception:
+        return "종목 역대고점 대비: 조회 실패"
 
-    # 2) 네이버 실시간 1분봉(최근 1,500개) -> 5분봉 변환
-    chart_url = f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=minute&count=1500&requestType=0"
-    chart_res = requests.get(chart_url, headers=headers, timeout=10)
-    root = ET.fromstring(chart_res.text)
 
-    rows = []
-    for item in root.findall(".//item"):
-        parts = item.attrib["data"].split("|")
-        if len(parts) < 5 or parts[4] == "null":
-            continue
-        c = float(parts[4])
-        o = float(parts[1]) if parts[1] != "null" else c
-        h = float(parts[2]) if parts[2] != "null" else c
-        l = float(parts[3]) if parts[3] != "null" else c
-        rows.append({
-            "Datetime": pd.to_datetime(parts[0], format="%Y%m%d%H%M"),
-            "Open": o,
-            "High": h,
-            "Low": l,
-            "Close": c,
-        })
+def get_nasdaq_futures_text():
+    try:
+        df_max = yf.download("NQ=F", period="max", interval="1wk", progress=False)
+        df_now = yf.download("NQ=F", period="1d", interval="5m", progress=False)
+        if isinstance(df_max.columns, pd.MultiIndex):
+            df_max.columns = df_max.columns.get_level_values(0)
+        if isinstance(df_now.columns, pd.MultiIndex):
+            df_now.columns = df_now.columns.get_level_values(0)
 
-    if not rows:
-        raise ValueError("네이버 분봉 데이터가 비어 있습니다.")
+        curr = float(df_now["Close"].dropna().iloc[-1])
+        ath = max(float(df_max["High"].max()), curr)
+        dd_pct = (curr - ath) / ath * 100
+        return f"나스닥선물: {curr:,.2f} (역대고점 대비 {dd_pct:+.2f}%)"
+    except Exception:
+        return "나스닥선물: 조회 실패"
 
-    df_1m = pd.DataFrame(rows).set_index("Datetime")
-    df_5m_rt = df_1m.resample("5min").agg({
-        "Open": "first",
-        "High": "max",
-        "Low": "min",
-        "Close": "last"
-    }).dropna()
 
-    # 최신 5분봉의 종가/저가를 실시간 현재가와 동기화
-    df_5m_rt.iloc[-1, df_5m_rt.columns.get_loc("Close")] = current_close
-    latest_low = min(float(df_5m_rt["Low"].iloc[-1]), current_close)
-    df_5m_rt.iloc[-1, df_5m_rt.columns.get_loc("Low")] = latest_low
+def get_usdkrw_text():
+    try:
+        df_1d = yf.download("KRW=X", period="5d", interval="1d", progress=False)
+        df_now = yf.download("KRW=X", period="1d", interval="5m", progress=False)
+        if isinstance(df_1d.columns, pd.MultiIndex):
+            df_1d.columns = df_1d.columns.get_level_values(0)
+        if isinstance(df_now.columns, pd.MultiIndex):
+            df_now.columns = df_now.columns.get_level_values(0)
 
-    return df_5m_rt, current_close, latest_low, prev_close
+        curr = float(df_now["Close"].dropna().iloc[-1])
+        prev = float(df_1d["Close"].dropna().iloc[-2])
+        chg_pct = (curr - prev) / prev * 100
+        return f"달러/원: {curr:,.2f}원 ({chg_pct:+.2f}%)"
+    except Exception:
+        return "달러/원: 조회 실패"
+
+
+def get_vix_text():
+    try:
+        df_vix = yf.download("^VIX", period="5d", interval="1d", progress=False)
+        if isinstance(df_vix.columns, pd.MultiIndex):
+            df_vix.columns = df_vix.columns.get_level_values(0)
+        curr = float(df_vix["Close"].dropna().iloc[-1])
+        prev = float(df_vix["Close"].dropna().iloc[-2])
+        chg_pct = (curr - prev) / prev * 100
+        return f"공포지수(VIX): {curr:.2f} ({chg_pct:+.2f}%)"
+    except Exception:
+        return "공포지수(VIX): 조회 실패"
+
 
 def main():
-    cur_mins = now.hour * 60 + now.minute
+    now_kst = datetime.now(KST)
+    today_kst_str = now_kst.strftime("%Y-%m-%d")
 
+    # 1) 거래 시간 필터 (09:05 ~ 15:15)
     if not TEST_MODE:
-        # 주말 및 장 운영시간(09:00 ~ 15:35) 외 실행 방지
-        if now.weekday() >= 5:
-            print("주말 휴장일입니다.")
-            return
-        if cur_mins < 9 * 60 or cur_mins > 15 * 60 + 35:
-            print(f"[{now.strftime('%H:%M:%S')}] 장 운영시간 외 종료")
+        hhmm = now_kst.hour * 100 + now_kst.minute
+        if not (905 <= hhmm <= 1515):
+            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:05~15:15) -> 패스")
             return
 
-    # 1) 야후 파이낸스 데이터로 직전 마감 3시간봉 지표 계산
-    df_yf = yf.download(TICKER, period="60d", interval="5m", progress=False)
-    if df_yf.empty:
-        print("야후 3시간봉 데이터를 불러오지 못했습니다.")
+    # 2) 하루 1회 중복 알림 방지
+    if not TEST_MODE and os.path.exists(ALERT_FILE):
+        with open(ALERT_FILE, "r", encoding="utf-8") as f:
+            if f.read().strip() == today_kst_str:
+                print(f"[{today_kst_str}] 오늘 이미 알림 발송 완료 -> 패스")
+                return
+
+    # 3) 5분봉 데이터 로드 및 한국 시간 변환
+    df_5m = yf.download(TICKER, period="60d", interval="5m", progress=False)
+    if df_5m.empty:
+        print("5분봉 데이터 없음")
         return
+    if isinstance(df_5m.columns, pd.MultiIndex):
+        df_5m.columns = df_5m.columns.get_level_values(0)
 
-    if isinstance(df_yf.columns, pd.MultiIndex):
-        df_yf.columns = df_yf.columns.get_level_values(0)
-
-    if df_yf.index.tz is None:
-        df_yf.index = df_yf.index.tz_localize("UTC").tz_convert("Asia/Seoul")
+    if df_5m.index.tz is None:
+        df_5m.index = df_5m.index.tz_localize("UTC").tz_convert(KST)
     else:
-        df_yf.index = df_yf.index.tz_convert("Asia/Seoul")
+        df_5m.index = df_5m.index.tz_convert(KST)
 
-    df_3h = df_yf.resample("180min").agg({
+    df_5m["rsi_5m"] = calc_tv_rsi(df_5m["Close"], RSI_LEN)
+
+    # 4) 기본 3시간봉 생성
+    df_3h = df_5m.resample("180min").agg({
         "Open": "first", "High": "max", "Low": "min", "Close": "last"
     }).dropna()
 
-    df_3h["ema"] = calc_tv_ema(df_3h["Close"], EMA_LEN)
-    df_3h["lower_env"] = df_3h["ema"] * (1 - ENV_PERCENT / 100)
-    df_3h["rsi_3h"] = calc_tv_rsi(df_3h["Close"], RSI_LEN)
+    # 5) 직전 거래일 종가 및 당일 고가/저가 구하기
+    latest_ts = df_5m.index[-1]
+    today_str = latest_ts.strftime("%Y-%m-%d")
+    today_5m = df_5m[df_5m.index.strftime("%Y-%m-%d") == today_str]
+    day_high = float(today_5m["High"].max())
+    day_low = float(today_5m["Low"].min())
 
-    htf_lower_env = float(df_3h["lower_env"].iloc[-2])
-    htf_rsi_val = float(df_3h["rsi_3h"].iloc[-2])
+    df_1d = yf.download(TICKER, period="10d", interval="1d", progress=False)
+    if isinstance(df_1d.columns, pd.MultiIndex):
+        df_1d.columns = df_1d.columns.get_level_values(0)
+    prev_days = df_1d[df_1d.index.strftime("%Y-%m-%d") < today_str]
+    prev_close = float(prev_days["Close"].iloc[-1])
 
-    # 2) 네이버 증권 실시간 데이터로 5분봉 RSI 및 현재가/저가/전일종가 계산
-    try:
-        df_5m_rt, current_close, current_low, prev_close = get_naver_realtime(NAVER_CODE)
-        df_5m_rt["rsi_5m"] = calc_tv_rsi(df_5m_rt["Close"], RSI_LEN)
-        current_rsi_5m = float(df_5m_rt["rsi_5m"].iloc[-1])
-        source_tag = "네이버 실시간"
-    except Exception as e:
-        print(f"네이버 실시간 조회 실패, 야후 데이터로 대체: {e}")
-        df_yf["rsi_5m"] = calc_tv_rsi(df_yf["Close"], RSI_LEN)
-        current_close = float(df_yf["Close"].iloc[-1])
-        current_low = float(df_yf["Low"].iloc[-1])
-        current_rsi_5m = float(df_yf["rsi_5m"].iloc[-1])
-        df_1d = yf.download(TICKER, period="5d", interval="1d", progress=False)
-        if isinstance(df_1d.columns, pd.MultiIndex):
-            df_1d.columns = df_1d.columns.get_level_values(0)
-        prev_close = float(df_1d["Close"].iloc[-2])
-        source_tag = "야후 대체"
+    # 6) 최신 5분봉 + 실시간 진행 중인 3시간봉 계산
+    latest_row = df_5m.iloc[-1]
+    c_close = float(latest_row["Close"])
+    c_low = float(latest_row["Low"])
+    c_rsi_5m = float(latest_row["rsi_5m"])
 
-    print(f"[{now.strftime('%H:%M:%S')} | {source_tag}] 현재가:{current_close:,.0f} | 전일종가:{prev_close:,.0f} | "
-          f"3H하단:{htf_lower_env:,.0f} | 3H_RSI:{htf_rsi_val:.1f} | 5M_RSI:{current_rsi_5m:.1f}")
-
-    # 테스트 모드일 경우 즉시 테스트 알림 발송 후 종료
-    if TEST_MODE:
-        send_alert(
-            f"[테스트 성공 | {source_tag}]\n"
-            f"현재가: {current_close:,.0f}원 (전일: {prev_close:,.0f}원)\n"
-            f"3H하단: {htf_lower_env:,.0f}원 | 3H_RSI: {htf_rsi_val:.1f} | 5M_RSI: {current_rsi_5m:.1f}"
-        )
+    prev_3h_closes = df_3h[df_3h.index < latest_ts.floor("180min")]["Close"]
+    if len(prev_3h_closes) < RSI_LEN:
+        print("3시간봉 데이터 부족")
         return
 
-    # 3) 장 시작(09:00~09:05) / 장 마감(15:30~15:35) 생존 신고 알림 (각 1회)
-    last_status = ""
-    if os.path.exists(STATUS_FILE):
-        with open(STATUS_FILE, "r") as f:
-            last_status = f.read().strip()
+    live_3h_closes = pd.concat([
+        prev_3h_closes,
+        pd.Series([c_close], index=[latest_ts.floor("180min")])
+    ])
 
-    if 9 * 60 <= cur_mins <= 9 * 60 + 5 and last_status != f"{today_str}_OPEN":
-        with open(STATUS_FILE, "w") as f:
-            f.write(f"{today_str}_OPEN")
-        send_alert(
-            f"[장 시작] 봇 정상 가동 중\n"
-            f"현재가: {current_close:,.0f}원 | 3H_RSI: {htf_rsi_val:.1f} | 5M_RSI: {current_rsi_5m:.1f}"
-        )
-    elif 15 * 60 + 30 <= cur_mins <= 15 * 60 + 35 and last_status != f"{today_str}_CLOSE":
-        with open(STATUS_FILE, "w") as f:
-            f.write(f"{today_str}_CLOSE")
-        send_alert(
-            f"[장 마감] 오늘 감시 종료\n"
-            f"종가: {current_close:,.0f}원 | 3H_RSI: {htf_rsi_val:.1f} | 5M_RSI: {current_rsi_5m:.1f}"
-        )
+    htf_ema = float(calc_tv_ema(live_3h_closes, EMA_LEN).iloc[-1])
+    htf_lower_env = htf_ema * (1 - ENV_PERCENT / 100)
+    htf_rsi_val = float(calc_tv_rsi(live_3h_closes, RSI_LEN).iloc[-1])
 
-    # 4) 오늘 이미 매수 알림을 보냈는지 확인
-    if os.path.exists(RECORD_FILE):
-        with open(RECORD_FILE, "r") as f:
-            if f.read().strip() == today_str:
-                print(f"[{now.strftime('%H:%M:%S')}] 오늘 이미 매수 신호 발송 완료")
-                return
-
-    # 5) 4대 핵심 매수 조건 체크
-    cond_env = current_low <= htf_lower_env
+    # 7) 4가지 매수 조건 판별
+    cond_env = c_low <= htf_lower_env
     cond_3h_rsi = htf_rsi_val <= RSI_OVERSOLD
-    cond_5m_rsi = current_rsi_5m <= RSI_OVERSOLD
-    cond_neg_day = current_close < prev_close
+    cond_5m_rsi = c_rsi_5m <= RSI_OVERSOLD
+    cond_neg_day = c_close < prev_close
 
-    if cond_env and cond_3h_rsi and cond_5m_rsi and cond_neg_day:
-        with open(RECORD_FILE, "w") as f:
-            f.write(today_str)
+    is_signal = cond_env and cond_3h_rsi and cond_5m_rsi and cond_neg_day
+
+    if is_signal or TEST_MODE:
+        day_chg_pct = (c_close - prev_close) / prev_close * 100
+        env_diff_pct = (c_close - htf_lower_env) / htf_lower_env * 100
+
+        etf_ath_text = get_etf_ath_text(c_close)
+        nq_text = get_nasdaq_futures_text()
+        fx_text = get_usdkrw_text()
+        vix_text = get_vix_text()
+
+        prefix = "[테스트] " if TEST_MODE and not is_signal else ""
         msg = (
-            f"★ BUY 매수 신호 발생 ★\n"
-            f"종목: {TICKER}\n"
-            f"현재가: {current_close:,.0f}원 (전일대비 하락)\n"
-            f"3시간봉 엔벨로프 하단: {htf_lower_env:,.0f}원\n"
-            f"3시간봉 RSI: {htf_rsi_val:.1f}\n"
-            f"5분봉 RSI: {current_rsi_5m:.1f}"
+            f"{prefix}[매수 신호 | 418660] ({latest_ts.strftime('%H:%M')})\n"
+            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
+            f"당일 고/저: {day_high:,.0f}원 / {day_low:,.0f}원\n"
+            f"전일종가: {prev_close:,.0f}원\n"
+            f"엔벨로프 하단: {htf_lower_env:,.0f}원 (대비 {env_diff_pct:+.2f}%)\n"
+            f"RSI: 3H {htf_rsi_val:.1f} / 5M {c_rsi_5m:.1f}\n"
+            f"{etf_ath_text}\n"
+            f"{nq_text}\n"
+            f"{fx_text}\n"
+            f"{vix_text}"
         )
-        print("🚨 매수 조건 충족! ntfy 알림 발송")
+        print(msg)
         send_alert(msg)
+
+        if not TEST_MODE:
+            with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                f.write(today_kst_str)
+    else:
+        print(
+            f"[{latest_ts.strftime('%H:%M')}] 조건 미충족 | "
+            f"현재가:{c_close:,.0f} | 엔벨로프하단:{htf_lower_env:,.0f} | "
+            f"3H_RSI:{htf_rsi_val:.1f} | 5M_RSI:{c_rsi_5m:.1f}"
+        )
+
 
 if __name__ == "__main__":
     main()
