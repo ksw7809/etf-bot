@@ -6,6 +6,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 # ================= [ 사용자 설정 ] =================
+TEST_MODE = True            # 테스트 끝나면 반드시 False로 변경하세요!
+
 TICKER = "418660.KS"        # 야후 파이낸스 종목코드 (3시간봉용)
 NAVER_CODE = "418660"       # 네이버 증권 종목코드 (실시간 5분봉/현재가용)
 NTFY_TOPIC = "ksw7809_bot"  # ntfy 앱 구독 토픽 이름
@@ -88,15 +90,16 @@ def get_naver_realtime(code):
     return df_5m_rt, current_close, latest_low, prev_close
 
 def main():
-    # 주말 및 장 운영시간(09:00 ~ 15:35) 외 실행 방지
-    if now.weekday() >= 5:
-        print("주말 휴장일입니다.")
-        return
-
     cur_mins = now.hour * 60 + now.minute
-    if cur_mins < 9 * 60 or cur_mins > 15 * 60 + 35:
-        print(f"[{now.strftime('%H:%M:%S')}] 장 운영시간 외 종료")
-        return
+
+    if not TEST_MODE:
+        # 주말 및 장 운영시간(09:00 ~ 15:35) 외 실행 방지
+        if now.weekday() >= 5:
+            print("주말 휴장일입니다.")
+            return
+        if cur_mins < 9 * 60 or cur_mins > 15 * 60 + 35:
+            print(f"[{now.strftime('%H:%M:%S')}] 장 운영시간 외 종료")
+            return
 
     # 1) 야후 파이낸스 데이터로 직전 마감 3시간봉 지표 계산
     df_yf = yf.download(TICKER, period="60d", interval="5m", progress=False)
@@ -143,6 +146,15 @@ def main():
 
     print(f"[{now.strftime('%H:%M:%S')} | {source_tag}] 현재가:{current_close:,.0f} | 전일종가:{prev_close:,.0f} | "
           f"3H하단:{htf_lower_env:,.0f} | 3H_RSI:{htf_rsi_val:.1f} | 5M_RSI:{current_rsi_5m:.1f}")
+
+    # 테스트 모드일 경우 즉시 테스트 알림 발송 후 종료
+    if TEST_MODE:
+        send_alert(
+            f"[테스트 성공 | {source_tag}]\n"
+            f"현재가: {current_close:,.0f}원 (전일: {prev_close:,.0f}원)\n"
+            f"3H하단: {htf_lower_env:,.0f}원 | 3H_RSI: {htf_rsi_val:.1f} | 5M_RSI: {current_rsi_5m:.1f}"
+        )
+        return
 
     # 3) 장 시작(09:00~09:05) / 장 마감(15:30~15:35) 생존 신고 알림 (각 1회)
     last_status = ""
