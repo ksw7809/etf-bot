@@ -66,15 +66,22 @@ def get_naver_realtime(code):
     rows = []
     for item in root.findall(".//item"):
         parts = item.attrib["data"].split("|")
-        if len(parts) < 5 or "null" in parts[1:5]:
+        if len(parts) < 5 or parts[4] == "null":
             continue
+        c = float(parts[4])
+        o = float(parts[1]) if parts[1] != "null" else c
+        h = float(parts[2]) if parts[2] != "null" else c
+        l = float(parts[3]) if parts[3] != "null" else c
         rows.append({
             "Datetime": pd.to_datetime(parts[0], format="%Y%m%d%H%M"),
-            "Open": float(parts[1]),
-            "High": float(parts[2]),
-            "Low": float(parts[3]),
-            "Close": float(parts[4]),
+            "Open": o,
+            "High": h,
+            "Low": l,
+            "Close": c,
         })
+
+    if not rows:
+        raise ValueError("네이버 분봉 데이터가 비어 있습니다.")
 
     df_1m = pd.DataFrame(rows).set_index("Datetime")
     df_5m_rt = df_1m.resample("5min").agg({
