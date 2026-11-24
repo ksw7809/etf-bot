@@ -66,6 +66,8 @@ def get_naver_realtime(code):
     rows = []
     for item in root.findall(".//item"):
         parts = item.attrib["data"].split("|")
+        if len(parts) < 5 or "null" in parts[1:5]:
+            continue
         rows.append({
             "Datetime": pd.to_datetime(parts[0], format="%Y%m%d%H%M"),
             "Open": float(parts[1]),
