@@ -1,0 +1,39 @@
+name: ETF 5m Monitor
+
+on:
+  schedule:
+    # 평일 한국시간 09:00 ~ 14:55 (UTC 00:00 ~ 05:55) 5분마다 실행
+    - cron: '*/5 0-5 * * 1-5'
+    # 평일 한국시간 15:00 ~ 15:30 (UTC 06:00 ~ 06:30) 5분마다 실행
+    - cron: '0-30/5 6 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 불러오기
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 라이브러리 설치
+        run: pip install yfinance pandas requests
+
+      - name: 신호 체크 실행
+        run: python check.py
+
+      - name: 오늘 매수 기록 저장 (하루 1회 제한용)
+        run: |
+          if [ -f last_buy.txt ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add last_buy.txt
+            git diff --staged --quiet || (git commit -m "Update last buy date" && git push)
+          fi
