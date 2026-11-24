@@ -7,7 +7,7 @@ import yfinance as yf
 
 TICKER = "418660.KS"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
