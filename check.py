@@ -8,7 +8,7 @@ import yfinance as yf
 TICKER = "418660.KS"
 NAVER_CODE = "418660"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 # 알림 터치 시 열릴 차트 URL (트레이딩뷰를 원하시면 아래 줄 주석을 바꾸세요)
 CHART_URL = f"https://m.stock.naver.com/domestic/stock/{NAVER_CODE}/total"
@@ -194,20 +194,24 @@ def get_fear_and_greed_text():
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://edition.cnn.com/",
     }
-    rating_kr = {
-        "extreme fear": "매우 공포 😱",
-        "fear": "공포 😨",
-        "neutral": "중립 😐",
-        "greed": "탐욕 😏",
-        "extreme greed": "매우 탐욕 🔥",
-    }
     try:
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         data = res.json()["fear_and_greed"]
         score = round(data["score"])
-        label = rating_kr.get(data["rating"].lower(), data["rating"])
-        return f"공포·탐욕지수: {score}점 ({label})"
+
+        if score <= 24:
+            label = "극단적 공포 (Extreme Fear)"
+        elif score <= 44:
+            label = "공포 (Fear)"
+        elif score <= 54:
+            label = "중립 (Neutral)"
+        elif score <= 74:
+            label = "탐욕 (Greed)"
+        else:
+            label = "극단적 탐욕 (Extreme Greed)"
+
+        return f"공포·탐욕지수: {score}점 - {label}"
     except Exception:
         return "공포·탐욕지수: 조회 실패"
 
