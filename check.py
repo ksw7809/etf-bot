@@ -7,7 +7,7 @@ import yfinance as yf
 
 TICKER = "418660.KS"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = Flase # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 EMA_LEN = 20
 ENV_PERCENT = 2.0
@@ -185,11 +185,14 @@ def main():
         prefix = "[테스트] " if TEST_MODE and not is_signal else ""
         msg = (
             f"{prefix}[매수 신호 | 418660] ({latest_ts.strftime('%H:%M')})\n"
+            f"──────────────\n"
             f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
             f"당일 고/저: {day_high:,.0f}원 / {day_low:,.0f}원\n"
             f"전일종가: {prev_close:,.0f}원\n"
+            f"──────────────\n"
             f"엔벨로프 하단: {htf_lower_env:,.0f}원 (대비 {env_diff_pct:+.2f}%)\n"
             f"RSI: 3H {htf_rsi_val:.1f} / 5M {c_rsi_5m:.1f}\n"
+            f"──────────────\n"
             f"{etf_ath_text}\n"
             f"{nq_text}\n"
             f"{fx_text}\n"
