@@ -8,7 +8,7 @@ import yfinance as yf
 TICKER = "418660.KS"
 NAVER_CODE = "418660"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 # 알림 터치 시 열릴 차트 URL (트레이딩뷰를 원하시면 아래 줄 주석을 바꾸세요)
 CHART_URL = f"https://m.stock.naver.com/domestic/stock/{NAVER_CODE}/total"
