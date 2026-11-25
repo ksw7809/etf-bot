@@ -99,9 +99,9 @@ def get_etf_ath_text(curr_price):
             df_max.columns = df_max.columns.get_level_values(0)
         ath = max(float(df_max["High"].max()), curr_price)
         dd_pct = (curr_price - ath) / ath * 100
-        return f"종목 역대고점 대비: {dd_pct:+.2f}% (고점 {ath:,.0f}원)"
+        return f"종목 고점 대비: {dd_pct:+.2f}% (고점 {ath:,.0f}원)"
     except Exception:
-        return "종목 역대고점 대비: 조회 실패"
+        return "종목 고점 대비: 조회 실패"
 
 
 def get_nasdaq_futures_text():
@@ -116,9 +116,9 @@ def get_nasdaq_futures_text():
         curr = float(df_now["Close"].dropna().iloc[-1])
         ath = max(float(df_max["High"].max()), curr)
         dd_pct = (curr - ath) / ath * 100
-        return f"나스닥100선물: {curr:,.2f} (역대고점 대비 {dd_pct:+.2f}%)"
+        return f"나스닥100: {curr:,.2f} (고점 대비 {dd_pct:+.2f}%)"
     except Exception:
-        return "나스닥100선물: 조회 실패"
+        return "나스닥100: 조회 실패"
 
 
 def get_usdkrw_text():
@@ -163,9 +163,9 @@ def get_vix_text():
         curr = float(df_vix["Close"].dropna().iloc[-1])
         prev = float(df_vix["Close"].dropna().iloc[-2])
         chg_pct = (curr - prev) / prev * 100
-        return f"공포지수(VIX): {curr:.2f} ({chg_pct:+.2f}%)"
+        return f"지수(VIX): {curr:.2f} ({chg_pct:+.2f}%)"
     except Exception:
-        return "공포지수(VIX): 조회 실패"
+        return "지수(VIX): 조회 실패"
 
 
 def main():
