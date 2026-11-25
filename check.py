@@ -19,7 +19,7 @@ ENV_PERCENT = 2.0
 RSI_LEN = 14
 RSI_OVERSOLD = 35   # 1차 매수 기준 (3H & 5M RSI)
 RSI_EXTREME = 25    # 2차 극과매도 기준 (3H RSI)
-BRIEF_HOURS = {9, 10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (15시는 장마감)
+BRIEF_HOURS = {9, 10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (9시 장시작, 15시 장마감)
 HOLIDAY_HOURS = {9, 12, 15}                # 휴장일 점검 시간대 (총 3회)
 KST = ZoneInfo("Asia/Seoul")
 ALERT_FILE = "last_alert.txt"
@@ -243,6 +243,59 @@ def get_fear_and_greed_text():
         return "공포·탐욕지수: 조회 실패"
 
 
+def build_market_report(
+    title,
+    c_close,
+    day_chg_pct,
+    day_high=None,
+    day_low=None,
+    prev_close=None,
+    htf_lower_env=None,
+    env_diff_pct=None,
+    htf_rsi_val=None,
+    c_rsi_5m=None,
+    include_tech=True,
+):
+    etf_ath_text = get_etf_ath_text(c_close)
+    nq_text = get_nasdaq_futures_text()
+    sp500_text = get_sp500_futures_text()
+    fx_text = get_usdkrw_text()
+    jpy_text = get_jpykrw_text()
+    dxy_text = get_dxy_text()
+    vix_text = get_vix_text()
+    fng_text = get_fear_and_greed_text()
+
+    if include_tech:
+        top_section = (
+            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
+            f"당일 고/저: {day_high:,.0f}원 / {day_low:,.0f}원\n"
+            f"전일종가: {prev_close:,.0f}원\n"
+            f"──────────────\n"
+            f"엔벨로프 하단: {htf_lower_env:,.0f}원 (대비 {env_diff_pct:+.2f}%)\n"
+            f"RSI: 3H {htf_rsi_val:.1f} / 5M {c_rsi_5m:.1f}\n"
+        )
+    else:
+        top_section = f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
+
+    return (
+        f"{title}\n"
+        f"──────────────\n"
+        f"{top_section}"
+        f"──────────────\n"
+        f"{etf_ath_text}\n"
+        f"──────────────\n"
+        f"{nq_text}\n\n"
+        f"{sp500_text}\n\n"
+        f"{vix_text}\n\n"
+        f"{fng_text}\n"
+        f"──────────────\n"
+        f"{fx_text}\n"
+        f"{jpy_text}\n"
+        f"{dxy_text}\n"
+        f"──────────────"
+    )
+
+
 def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
     suffix = f" ({note})" if note else ""
     fng_text = get_fear_and_greed_text()
@@ -386,15 +439,6 @@ def main():
     new_brief_hour = last_brief_hour
 
     if is_first_signal or is_second_signal or TEST_MODE:
-        etf_ath_text = get_etf_ath_text(c_close)
-        nq_text = get_nasdaq_futures_text()
-        sp500_text = get_sp500_futures_text()
-        fx_text = get_usdkrw_text()
-        jpy_text = get_jpykrw_text()
-        dxy_text = get_dxy_text()
-        vix_text = get_vix_text()
-        fng_text = get_fear_and_greed_text()
-
         if TEST_MODE and not (is_first_signal or is_second_signal):
             title = f"[테스트 | 418660] ({latest_ts.strftime('%H:%M')})"
         elif is_second_signal or (is_first_signal and htf_rsi_val <= RSI_EXTREME):
@@ -404,27 +448,18 @@ def main():
             title = f"[매수 신호 | 418660] ({latest_ts.strftime('%H:%M')})"
             new_alert_count = 1
 
-        msg = (
-            f"{title}\n"
-            f"──────────────\n"
-            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
-            f"당일 고/저: {day_high:,.0f}원 / {day_low:,.0f}원\n"
-            f"전일종가: {prev_close:,.0f}원\n"
-            f"──────────────\n"
-            f"엔벨로프 하단: {htf_lower_env:,.0f}원 (대비 {env_diff_pct:+.2f}%)\n"
-            f"RSI: 3H {htf_rsi_val:.1f} / 5M {c_rsi_5m:.1f}\n"
-            f"──────────────\n"
-            f"{etf_ath_text}\n"
-            f"──────────────\n"
-            f"{nq_text}\n\n"
-            f"{sp500_text}\n\n"
-            f"{vix_text}\n\n"
-            f"{fng_text}\n"
-            f"──────────────\n"
-            f"{fx_text}\n"
-            f"{jpy_text}\n"
-            f"{dxy_text}\n"
-            f"──────────────"
+        msg = build_market_report(
+            title=title,
+            c_close=c_close,
+            day_chg_pct=day_chg_pct,
+            day_high=day_high,
+            day_low=day_low,
+            prev_close=prev_close,
+            htf_lower_env=htf_lower_env,
+            env_diff_pct=env_diff_pct,
+            htf_rsi_val=htf_rsi_val,
+            c_rsi_5m=c_rsi_5m,
+            include_tech=True,
         )
         print(msg)
         send_alert(msg)
@@ -433,14 +468,23 @@ def main():
             new_brief_hour = now_kst.hour
 
     elif is_brief_time:
-        # 8) 9시~15시 정각 점검 / 장마감
-        brief_label = "장마감" if now_kst.hour == 15 else "정각 점검"
-        fng_text = get_fear_and_greed_text()
-        msg = (
-            f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})\n"
-            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%) ({data_status})\n"
-            f"{fng_text}"
-        )
+        # 8) 9시 장시작(미국장·환율 브리핑) / 10~14시 정각 점검 / 15시 장마감
+        if now_kst.hour == 9:
+            title = f"[장시작 | 418660] ({latest_ts.strftime('%H:%M')})"
+            msg = build_market_report(
+                title=title,
+                c_close=c_close,
+                day_chg_pct=day_chg_pct,
+                include_tech=False,
+            )
+        else:
+            brief_label = "장마감" if now_kst.hour == 15 else "정각 점검"
+            fng_text = get_fear_and_greed_text()
+            msg = (
+                f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})\n"
+                f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%) ({data_status})\n"
+                f"{fng_text}"
+            )
         print(msg)
         send_alert(msg)
         new_brief_hour = now_kst.hour
