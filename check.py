@@ -8,7 +8,7 @@ import yfinance as yf
 TICKER = "418660.KS"
 NAVER_CODE = "418660"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 # 알림 터치 시 열릴 차트 URL (트레이딩뷰를 원하시면 아래 줄 주석을 바꾸세요)
 CHART_URL = f"https://m.stock.naver.com/domestic/stock/{NAVER_CODE}/total"
@@ -109,18 +109,45 @@ def get_etf_ath_text(curr_price):
 def get_nasdaq_futures_text():
     try:
         df_max = yf.download("NQ=F", period="max", interval="1wk", progress=False)
+        df_1d = yf.download("NQ=F", period="5d", interval="1d", progress=False)
         df_now = yf.download("NQ=F", period="1d", interval="5m", progress=False)
         if isinstance(df_max.columns, pd.MultiIndex):
             df_max.columns = df_max.columns.get_level_values(0)
+        if isinstance(df_1d.columns, pd.MultiIndex):
+            df_1d.columns = df_1d.columns.get_level_values(0)
         if isinstance(df_now.columns, pd.MultiIndex):
             df_now.columns = df_now.columns.get_level_values(0)
 
         curr = float(df_now["Close"].dropna().iloc[-1])
+        prev = float(df_1d["Close"].dropna().iloc[-2])
+        chg_pct = (curr - prev) / prev * 100
         ath = max(float(df_max["High"].max()), curr)
         dd_pct = (curr - ath) / ath * 100
-        return f"나스닥100지수: {curr:,.2f}\n(역대고점 대비 {dd_pct:+.2f}%)"
+        return f"나스닥100지수: {curr:,.2f} ({chg_pct:+.2f}%)\n(역대고점 대비 {dd_pct:+.2f}%)"
     except Exception:
         return "나스닥100지수: 조회 실패"
+
+
+def get_sp500_futures_text():
+    try:
+        df_max = yf.download("ES=F", period="max", interval="1wk", progress=False)
+        df_1d = yf.download("ES=F", period="5d", interval="1d", progress=False)
+        df_now = yf.download("ES=F", period="1d", interval="5m", progress=False)
+        if isinstance(df_max.columns, pd.MultiIndex):
+            df_max.columns = df_max.columns.get_level_values(0)
+        if isinstance(df_1d.columns, pd.MultiIndex):
+            df_1d.columns = df_1d.columns.get_level_values(0)
+        if isinstance(df_now.columns, pd.MultiIndex):
+            df_now.columns = df_now.columns.get_level_values(0)
+
+        curr = float(df_now["Close"].dropna().iloc[-1])
+        prev = float(df_1d["Close"].dropna().iloc[-2])
+        chg_pct = (curr - prev) / prev * 100
+        ath = max(float(df_max["High"].max()), curr)
+        dd_pct = (curr - ath) / ath * 100
+        return f"S&P500지수: {curr:,.2f} ({chg_pct:+.2f}%)\n(역대고점 대비 {dd_pct:+.2f}%)"
+    except Exception:
+        return "S&P500지수: 조회 실패"
 
 
 def get_usdkrw_text():
@@ -201,17 +228,17 @@ def get_fear_and_greed_text():
         score = round(data["score"])
 
         if score <= 24:
-            label = "극단적 공포 (Extreme Fear)"
+            label = "극단적 공포 / Extreme Fear"
         elif score <= 44:
-            label = "공포 (Fear)"
+            label = "공포 / Fear"
         elif score <= 54:
-            label = "중립 (Neutral)"
+            label = "중립 / Neutral"
         elif score <= 74:
-            label = "탐욕 (Greed)"
+            label = "탐욕 / Greed"
         else:
-            label = "극단적 탐욕 (Extreme Greed)"
+            label = "극단적 탐욕 / Extreme Greed"
 
-        return f"공포·탐욕지수: {score}점 - {label}"
+        return f"공포·탐욕지수: {score}점\n({label})"
     except Exception:
         return "공포·탐욕지수: 조회 실패"
 
@@ -361,6 +388,7 @@ def main():
     if is_first_signal or is_second_signal or TEST_MODE:
         etf_ath_text = get_etf_ath_text(c_close)
         nq_text = get_nasdaq_futures_text()
+        sp500_text = get_sp500_futures_text()
         fx_text = get_usdkrw_text()
         jpy_text = get_jpykrw_text()
         dxy_text = get_dxy_text()
@@ -389,7 +417,8 @@ def main():
             f"{etf_ath_text}\n"
             f"──────────────\n"
             f"{nq_text}\n\n"
-            f"{vix_text}\n"
+            f"{sp500_text}\n\n"
+            f"{vix_text}\n\n"
             f"{fng_text}\n"
             f"──────────────\n"
             f"{fx_text}\n"
