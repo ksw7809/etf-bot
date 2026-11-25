@@ -8,7 +8,7 @@ import yfinance as yf
 TICKER = "418660.KS"
 NAVER_CODE = "418660"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 # 알림 터치 시 열릴 차트 URL (트레이딩뷰를 원하시면 아래 줄 주석을 바꾸세요)
 CHART_URL = f"https://m.stock.naver.com/domestic/stock/{NAVER_CODE}/total"
@@ -20,6 +20,7 @@ RSI_LEN = 14
 RSI_OVERSOLD = 35   # 1차 매수 기준 (3H & 5M RSI)
 RSI_EXTREME = 25    # 2차 극과매도 기준 (3H RSI)
 BRIEF_HOURS = {9, 10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (15시는 장마감)
+HOLIDAY_HOURS = {9, 12, 15}                # 휴장일 점검 시간대 (총 3회)
 KST = ZoneInfo("Asia/Seoul")
 ALERT_FILE = "last_alert.txt"
 
@@ -156,6 +157,23 @@ def get_jpykrw_text():
         return "엔/원(100엔): 조회 실패"
 
 
+def get_dxy_text():
+    try:
+        df_1d = yf.download("DX-Y.NYB", period="5d", interval="1d", progress=False)
+        df_now = yf.download("DX-Y.NYB", period="1d", interval="5m", progress=False)
+        if isinstance(df_1d.columns, pd.MultiIndex):
+            df_1d.columns = df_1d.columns.get_level_values(0)
+        if isinstance(df_now.columns, pd.MultiIndex):
+            df_now.columns = df_now.columns.get_level_values(0)
+
+        curr = float(df_now["Close"].dropna().iloc[-1])
+        prev = float(df_1d["Close"].dropna().iloc[-2])
+        chg_pct = (curr - prev) / prev * 100
+        return f"달러인덱스(DXY): {curr:,.2f} ({chg_pct:+.2f}%)"
+    except Exception:
+        return "달러인덱스(DXY): 조회 실패"
+
+
 def get_vix_text():
     try:
         df_vix = yf.download("^VIX", period="5d", interval="1d", progress=False)
@@ -204,7 +222,7 @@ def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
     )
     print(msg)
     send_alert(msg)
-    save_today_state(today_kst_str, alert_count, 12)
+    save_today_state(today_kst_str, alert_count, now_kst.hour)
 
 
 def main():
@@ -240,7 +258,7 @@ def main():
     if naver_data is not None:
         c_close, day_high, day_low, prev_close, market_status = naver_data
         if not TEST_MODE and market_status != "OPEN":
-            if now_kst.hour == 12 and now_kst.minute < 10 and last_brief_hour != 12:
+            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
                 send_holiday_check(now_kst, today_kst_str, alert_count)
             else:
                 print(f"[{now_kst.strftime('%H:%M')}] 휴장일 또는 장 마감 상태({market_status}) -> 패스")
@@ -283,9 +301,9 @@ def main():
         latest_ts = df_5m.index[-1]
         today_str = latest_ts.strftime("%Y-%m-%d")
 
-        # 야후 백업 시에도 오늘 거래 데이터가 없으면 휴장일로 판단 (12시만 점검 발송)
+        # 야후 백업 시에도 오늘 거래 데이터가 없으면 휴장일로 판단 (9, 12, 15시 점검 발송)
         if not TEST_MODE and today_str != today_kst_str:
-            if now_kst.hour == 12 and now_kst.minute < 10 and last_brief_hour != 12:
+            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
                 send_holiday_check(now_kst, today_kst_str, alert_count, note="네이버 지연")
             else:
                 print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 패스")
@@ -341,6 +359,7 @@ def main():
         nq_text = get_nasdaq_futures_text()
         fx_text = get_usdkrw_text()
         jpy_text = get_jpykrw_text()
+        dxy_text = get_dxy_text()
         vix_text = get_vix_text()
         fng_text = get_fear_and_greed_text()
 
@@ -371,6 +390,7 @@ def main():
             f"──────────────\n"
             f"{fx_text}\n"
             f"{jpy_text}\n"
+            f"{dxy_text}\n"
             f"──────────────"
         )
         print(msg)
