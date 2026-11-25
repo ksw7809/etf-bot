@@ -8,7 +8,7 @@ import yfinance as yf
 TICKER = "418660.KS"
 NAVER_CODE = "418660"
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-TEST_MODE = False  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
+TEST_MODE = True  # 테스트 알림을 바로 받아보고 싶을 때만 True로 변경
 
 # 알림 터치 시 열릴 차트 URL (트레이딩뷰를 원하시면 아래 줄 주석을 바꾸세요)
 CHART_URL = f"https://m.stock.naver.com/domestic/stock/{NAVER_CODE}/total"
@@ -169,11 +169,38 @@ def get_vix_text():
         return "공포지수(VIX): 조회 실패"
 
 
+def get_fear_and_greed_text():
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://edition.cnn.com/",
+    }
+    rating_kr = {
+        "extreme fear": "매우 공포 😱",
+        "fear": "공포 😨",
+        "neutral": "중립 😐",
+        "greed": "탐욕 😏",
+        "extreme greed": "매우 탐욕 🔥",
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        res.raise_for_status()
+        data = res.json()["fear_and_greed"]
+        score = round(data["score"])
+        label = rating_kr.get(data["rating"].lower(), data["rating"])
+        return f"공포·탐욕지수: {score}점 ({label})"
+    except Exception:
+        return "공포·탐욕지수: 조회 실패"
+
+
 def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
     suffix = f" ({note})" if note else ""
+    fng_text = get_fear_and_greed_text()
     msg = (
         f"[휴장일 점검 | 418660] ({now_kst.strftime('%H:%M')})\n"
-        f"오늘은 증시 휴장일입니다. 봇 서버 정상 작동 중{suffix}"
+        f"오늘은 증시 휴장일입니다. 봇 서버 정상 작동 중{suffix}\n"
+        f"{fng_text}"
     )
     print(msg)
     send_alert(msg)
@@ -315,6 +342,7 @@ def main():
         fx_text = get_usdkrw_text()
         jpy_text = get_jpykrw_text()
         vix_text = get_vix_text()
+        fng_text = get_fear_and_greed_text()
 
         if TEST_MODE and not (is_first_signal or is_second_signal):
             title = f"[테스트 | 418660] ({latest_ts.strftime('%H:%M')})"
@@ -339,6 +367,7 @@ def main():
             f"──────────────\n"
             f"{nq_text}\n\n"
             f"{vix_text}\n"
+            f"{fng_text}\n"
             f"──────────────\n"
             f"{fx_text}\n"
             f"{jpy_text}\n"
@@ -353,9 +382,11 @@ def main():
     elif is_brief_time:
         # 8) 9시~15시 정각 점검 / 장마감
         brief_label = "장마감" if now_kst.hour == 15 else "정각 점검"
+        fng_text = get_fear_and_greed_text()
         msg = (
             f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})\n"
-            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%) ({data_status})"
+            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%) ({data_status})\n"
+            f"{fng_text}"
         )
         print(msg)
         send_alert(msg)
