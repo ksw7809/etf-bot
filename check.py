@@ -19,7 +19,7 @@ ENV_PERCENT = 2.0
 RSI_LEN = 14
 RSI_OVERSOLD = 35   # 1차 매수 기준 (3H & 5M RSI)
 RSI_EXTREME = 25    # 2차 극과매도 기준 (3H RSI)
-BRIEF_HOURS = {10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (15시는 장마감)
+BRIEF_HOURS = {9, 10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (15시는 장마감)
 KST = ZoneInfo("Asia/Seoul")
 ALERT_FILE = "last_alert.txt"
 
@@ -72,7 +72,7 @@ def save_today_state(today_str, alert_count, last_brief_hour):
 
 
 def get_naver_realtime(code=NAVER_CODE):
-    """네이버 금융 실시간 API에서 현재가, 당일 고/저가, 전일종가 조회 (0초 지연)"""
+    """네이버 금융 실시간 API에서 현재가, 당일 고/저가, 전일종가, 장상태(ms) 조회"""
     try:
         url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -84,9 +84,10 @@ def get_naver_realtime(code=NAVER_CODE):
         high = float(data["hv"]) if data.get("hv", 0) > 0 else curr
         low = float(data["lv"]) if data.get("lv", 0) > 0 else curr
         prev_close = float(data["pcv"])
+        market_status = data.get("ms", "")  # OPEN: 개장, CLOSE: 휴장/마감
 
         if curr > 0 and prev_close > 0:
-            return curr, high, low, prev_close
+            return curr, high, low, prev_close, market_status
     except Exception as e:
         print(f"네이버 실시간 조회 실패 (야후 데이터로 대체): {e}")
     return None
@@ -168,15 +169,26 @@ def get_vix_text():
         return "공포지수(VIX): 조회 실패"
 
 
+def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
+    suffix = f" ({note})" if note else ""
+    msg = (
+        f"[휴장일 점검 | 418660] ({now_kst.strftime('%H:%M')})\n"
+        f"오늘은 증시 휴장일입니다. 봇 서버 정상 작동 중{suffix}"
+    )
+    print(msg)
+    send_alert(msg)
+    save_today_state(today_kst_str, alert_count, 12)
+
+
 def main():
     now_kst = datetime.now(KST)
     today_kst_str = now_kst.strftime("%Y-%m-%d")
+    hhmm = now_kst.hour * 100 + now_kst.minute
 
-    # 1) 거래 시간 필터 (09:05 ~ 15:15)
+    # 1) 전체 실행 시간 필터 (09:00 ~ 15:15)
     if not TEST_MODE:
-        hhmm = now_kst.hour * 100 + now_kst.minute
-        if not (905 <= hhmm <= 1515):
-            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:05~15:15) -> 패스")
+        if not (900 <= hhmm <= 1515):
+            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:00~15:15) -> 패스")
             return
 
     # 2) 당일 상태 로드 (매수 알림 횟수, 마지막 정각 브리핑 시각)
@@ -190,12 +202,24 @@ def main():
         and (now_kst.minute < 10)
         and (last_brief_hour != now_kst.hour)
     )
+    is_signal_time = (hhmm >= 905) or TEST_MODE
 
-    if not TEST_MODE and alert_count >= 2 and not is_brief_time:
-        print(f"[{today_kst_str}] 오늘 1·2차 알림 완료 & 브리핑 시간 아님 -> 패스")
+    if not TEST_MODE and (not is_signal_time or alert_count >= 2) and not is_brief_time:
+        print(f"[{today_kst_str}] 시세 감시 대기/완료 & 브리핑 시간 아님 -> 패스")
         return
 
-    # 3) 야후 파이낸스 과거 5분봉 데이터 로드 및 한국 시간 변환
+    # 3) 네이버 실시간 시세 및 휴장일 여부 먼저 확인
+    naver_data = get_naver_realtime(NAVER_CODE)
+    if naver_data is not None:
+        c_close, day_high, day_low, prev_close, market_status = naver_data
+        if not TEST_MODE and market_status != "OPEN":
+            if now_kst.hour == 12 and now_kst.minute < 10 and last_brief_hour != 12:
+                send_holiday_check(now_kst, today_kst_str, alert_count)
+            else:
+                print(f"[{now_kst.strftime('%H:%M')}] 휴장일 또는 장 마감 상태({market_status}) -> 패스")
+            return
+
+    # 4) 야후 파이낸스 과거 5분봉 데이터 로드 및 한국 시간 변환
     df_5m = yf.download(TICKER, period="60d", interval="5m", progress=False)
     if df_5m.empty:
         raise RuntimeError("야후 파이낸스 5분봉 데이터 조회 실패 (빈 데이터)")
@@ -207,17 +231,15 @@ def main():
     else:
         df_5m.index = df_5m.index.tz_convert(KST)
 
-    # 4) 기본 3시간봉 생성
+    # 5) 기본 3시간봉 생성
     df_3h = df_5m.resample("180min").agg({
         "Open": "first", "High": "max", "Low": "min", "Close": "last"
     }).dropna()
 
-    # 5) 네이버 실시간 시세 결합 (실패 시 야후 데이터로 자동 대체)
-    naver_data = get_naver_realtime(NAVER_CODE)
+    # 6) 네이버 실시간 시세 결합 (실패 시 야후 데이터로 자동 대체)
     data_status = "정상"
 
     if naver_data is not None:
-        c_close, day_high, day_low, prev_close = naver_data
         c_low = c_close
         latest_ts = now_kst
 
@@ -233,6 +255,15 @@ def main():
         data_status = "야후 지연"
         latest_ts = df_5m.index[-1]
         today_str = latest_ts.strftime("%Y-%m-%d")
+
+        # 야후 백업 시에도 오늘 거래 데이터가 없으면 휴장일로 판단 (12시만 점검 발송)
+        if not TEST_MODE and today_str != today_kst_str:
+            if now_kst.hour == 12 and now_kst.minute < 10 and last_brief_hour != 12:
+                send_holiday_check(now_kst, today_kst_str, alert_count, note="네이버 지연")
+            else:
+                print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 패스")
+            return
+
         today_5m = df_5m[df_5m.index.strftime("%Y-%m-%d") == today_str]
         day_high = float(today_5m["High"].max())
         day_low = float(today_5m["Low"].min())
@@ -266,14 +297,14 @@ def main():
     day_chg_pct = (c_close - prev_close) / prev_close * 100
     env_diff_pct = (c_close - htf_lower_env) / htf_lower_env * 100
 
-    # 6) 1차 일반 매수 / 2차 극과매도 조건 판별
+    # 7) 1차 일반 매수 / 2차 극과매도 조건 판별 (09:05 이후부터 적용)
     cond_env = c_low <= htf_lower_env
     cond_3h_rsi = htf_rsi_val <= RSI_OVERSOLD
     cond_5m_rsi = c_rsi_5m <= RSI_OVERSOLD
     cond_neg_day = c_close < prev_close
 
-    is_first_signal = (alert_count == 0) and cond_env and cond_3h_rsi and cond_5m_rsi and cond_neg_day
-    is_second_signal = (alert_count == 1) and (htf_rsi_val <= RSI_EXTREME) and cond_neg_day
+    is_first_signal = is_signal_time and (alert_count == 0) and cond_env and cond_3h_rsi and cond_5m_rsi and cond_neg_day
+    is_second_signal = is_signal_time and (alert_count == 1) and (htf_rsi_val <= RSI_EXTREME) and cond_neg_day
 
     new_alert_count = alert_count
     new_brief_hour = last_brief_hour
@@ -320,7 +351,7 @@ def main():
             new_brief_hour = now_kst.hour
 
     elif is_brief_time:
-        # 7) 10시~15시 정각 점검 / 장마감
+        # 8) 9시~15시 정각 점검 / 장마감
         brief_label = "장마감" if now_kst.hour == 15 else "정각 점검"
         msg = (
             f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})\n"
