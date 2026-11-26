@@ -19,20 +19,34 @@ ENV_PERCENT = 2.0
 RSI_LEN = 14
 RSI_OVERSOLD = 35   # 1차 매수 기준 (3H & 5M RSI)
 RSI_EXTREME = 25    # 2차 극과매도 기준 (3H RSI)
-BRIEF_HOURS = {9, 10, 11, 12, 13, 14, 15}  # 정각 점검 시간대 (9시 장시작, 15시 장마감)
-HOLIDAY_HOURS = {9, 12, 15}                # 휴장일 점검 시간대 (총 3회)
+BRIEF_HOURS = {9, 10, 11, 12, 13, 14}  # 정각 점검 시간대 (9시 장시작, 10~14시 정각 점검)
+HOLIDAY_HOURS = {9, 12, 15}            # 휴장일 점검 시간대 (총 3회)
 KST = ZoneInfo("Asia/Seoul")
 ALERT_FILE = "last_alert.txt"
 
 
-def send_alert(msg):
-    headers = {
-        "Click": CHART_URL,
+def fmt_pct(pct):
+    """등락률에 따라 🔴(상승) / 🔵(하락) / ⚪(보합) 기호 추가"""
+    if pct > 0:
+        dot = "🔴"
+    elif pct < 0:
+        dot = "🔵"
+    else:
+        dot = "⚪"
+    return f"{pct:+.2f}% {dot}"
+
+
+def send_alert(title, msg):
+    """한글 Title 헤더가 깨지지 않도록 JSON 방식으로 ntfy 전송 (모든 알림 첫 줄 아래 한 칸 띄움)"""
+    payload = {
+        "topic": NTFY_TOPIC,
+        "title": title,
+        "message": f"\u200b\n{msg}",
+        "click": CHART_URL,
     }
     requests.post(
-        f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=msg.encode("utf-8"),
-        headers=headers,
+        "https://ntfy.sh",
+        json=payload,
         timeout=20,
     )
 
@@ -123,7 +137,7 @@ def get_nasdaq_futures_text():
         chg_pct = (curr - prev) / prev * 100
         ath = max(float(df_max["High"].max()), curr)
         dd_pct = (curr - ath) / ath * 100
-        return f"나스닥100지수: {curr:,.2f} ({chg_pct:+.2f}%)\n(역대고점 대비 {dd_pct:+.2f}%)"
+        return f"나스닥100지수: {curr:,.2f} ({fmt_pct(chg_pct)})\n(역대고점 대비 {dd_pct:+.2f}%)"
     except Exception:
         return "나스닥100지수: 조회 실패"
 
@@ -145,7 +159,7 @@ def get_sp500_futures_text():
         chg_pct = (curr - prev) / prev * 100
         ath = max(float(df_max["High"].max()), curr)
         dd_pct = (curr - ath) / ath * 100
-        return f"S&P500지수: {curr:,.2f} ({chg_pct:+.2f}%)\n(역대고점 대비 {dd_pct:+.2f}%)"
+        return f"S&P500지수: {curr:,.2f} ({fmt_pct(chg_pct)})\n(역대고점 대비 {dd_pct:+.2f}%)"
     except Exception:
         return "S&P500지수: 조회 실패"
 
@@ -162,7 +176,7 @@ def get_usdkrw_text():
         curr = float(df_now["Close"].dropna().iloc[-1])
         prev = float(df_1d["Close"].dropna().iloc[-2])
         chg_pct = (curr - prev) / prev * 100
-        return f"달러/원: {curr:,.2f}원 ({chg_pct:+.2f}%)"
+        return f"달러/원: {curr:,.2f}원 ({fmt_pct(chg_pct)})"
     except Exception:
         return "달러/원: 조회 실패"
 
@@ -179,7 +193,7 @@ def get_jpykrw_text():
         curr = float(df_now["Close"].dropna().iloc[-1]) * 100
         prev = float(df_1d["Close"].dropna().iloc[-2]) * 100
         chg_pct = (curr - prev) / prev * 100
-        return f"엔/원(100엔): {curr:,.2f}원 ({chg_pct:+.2f}%)"
+        return f"엔/원(100엔): {curr:,.2f}원 ({fmt_pct(chg_pct)})"
     except Exception:
         return "엔/원(100엔): 조회 실패"
 
@@ -196,7 +210,7 @@ def get_dxy_text():
         curr = float(df_now["Close"].dropna().iloc[-1])
         prev = float(df_1d["Close"].dropna().iloc[-2])
         chg_pct = (curr - prev) / prev * 100
-        return f"달러인덱스(DXY): {curr:,.2f} ({chg_pct:+.2f}%)"
+        return f"달러인덱스(DXY): {curr:,.2f} ({fmt_pct(chg_pct)})"
     except Exception:
         return "달러인덱스(DXY): 조회 실패"
 
@@ -209,7 +223,7 @@ def get_vix_text():
         curr = float(df_vix["Close"].dropna().iloc[-1])
         prev = float(df_vix["Close"].dropna().iloc[-2])
         chg_pct = (curr - prev) / prev * 100
-        return f"공포지수(VIX): {curr:.2f} ({chg_pct:+.2f}%)"
+        return f"공포지수(VIX): {curr:.2f} ({fmt_pct(chg_pct)})"
     except Exception:
         return "공포지수(VIX): 조회 실패"
 
@@ -244,7 +258,6 @@ def get_fear_and_greed_text():
 
 
 def build_market_report(
-    title,
     c_close,
     day_chg_pct,
     day_high=None,
@@ -267,7 +280,7 @@ def build_market_report(
 
     if include_tech:
         top_section = (
-            f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
+            f"현재가: {c_close:,.0f}원 ({fmt_pct(day_chg_pct)})\n"
             f"당일 고/저: {day_high:,.0f}원 / {day_low:,.0f}원\n"
             f"전일종가: {prev_close:,.0f}원\n"
             f"──────────────\n"
@@ -275,10 +288,9 @@ def build_market_report(
             f"RSI: 3H {htf_rsi_val:.1f} / 5M {c_rsi_5m:.1f}\n"
         )
     else:
-        top_section = f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%)\n"
+        top_section = f"현재가: {c_close:,.0f}원 ({fmt_pct(day_chg_pct)})\n"
 
     return (
-        f"{title}\n"
         f"──────────────\n"
         f"{top_section}"
         f"──────────────\n"
@@ -299,13 +311,13 @@ def build_market_report(
 def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
     suffix = f" ({note})" if note else ""
     fng_text = get_fear_and_greed_text()
+    title = f"[휴장일 점검 | 418660] ({now_kst.strftime('%H:%M')})"
     msg = (
-        f"[휴장일 점검 | 418660] ({now_kst.strftime('%H:%M')})\n"
         f"오늘은 증시 휴장일입니다. 봇 서버 정상 작동 중{suffix}\n"
         f"{fng_text}"
     )
-    print(msg)
-    send_alert(msg)
+    print(f"{title}\n\n{msg}")
+    send_alert(title, msg)
     save_today_state(today_kst_str, alert_count, now_kst.hour)
 
 
@@ -314,13 +326,13 @@ def main():
     today_kst_str = now_kst.strftime("%Y-%m-%d")
     hhmm = now_kst.hour * 100 + now_kst.minute
 
-    # 1) 전체 실행 시간 필터 (09:00 ~ 15:15)
+    # 1) 전체 실행 시간 필터 (09:00 ~ 15:40)
     if not TEST_MODE:
-        if not (900 <= hhmm <= 1515):
-            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:00~15:15) -> 패스")
+        if not (900 <= hhmm <= 1540):
+            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:00~15:40) -> 패스")
             return
 
-    # 2) 당일 상태 로드 (매수 알림 횟수, 마지막 정각 브리핑 시각)
+    # 2) 당일 상태 로드 (매수 알림 횟수, 마지막 브리핑 시각)
     if TEST_MODE:
         alert_count, last_brief_hour = 0, -1
     else:
@@ -331,9 +343,14 @@ def main():
         and (now_kst.minute < 10)
         and (last_brief_hour != now_kst.hour)
     )
-    is_signal_time = (hhmm >= 905) or TEST_MODE
+    is_close_time = (
+        (now_kst.hour == 15)
+        and (30 <= now_kst.minute < 40)
+        and (last_brief_hour != 15)
+    )
+    is_signal_time = (905 <= hhmm <= 1515) or TEST_MODE
 
-    if not TEST_MODE and (not is_signal_time or alert_count >= 2) and not is_brief_time:
+    if not TEST_MODE and (not is_signal_time or alert_count >= 2) and not is_brief_time and not is_close_time:
         print(f"[{today_kst_str}] 시세 감시 대기/완료 & 브리핑 시간 아님 -> 패스")
         return
 
@@ -341,7 +358,8 @@ def main():
     naver_data = get_naver_realtime(NAVER_CODE)
     if naver_data is not None:
         c_close, day_high, day_low, prev_close, market_status = naver_data
-        if not TEST_MODE and market_status != "OPEN":
+        # 15:30 장마감 시간대에는 장 종료(CLOSE) 상태이므로 아래에서 당일 거래 유무 확인 후 발송
+        if not TEST_MODE and market_status != "OPEN" and not is_close_time:
             if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
                 send_holiday_check(now_kst, today_kst_str, alert_count)
             else:
@@ -359,6 +377,13 @@ def main():
         df_5m.index = df_5m.index.tz_localize("UTC").tz_convert(KST)
     else:
         df_5m.index = df_5m.index.tz_convert(KST)
+
+    # 15:30 장마감 시 휴장일 여부 최종 확인 (오늘 거래 데이터가 없으면 휴장일 -> 패스)
+    if not TEST_MODE and is_close_time:
+        latest_trade_date = df_5m.index[-1].strftime("%Y-%m-%d")
+        if latest_trade_date != today_kst_str:
+            print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 15:30 장마감 패스")
+            return
 
     # 5) 기본 3시간봉 생성
     df_3h = df_5m.resample("180min").agg({
@@ -426,7 +451,7 @@ def main():
     day_chg_pct = (c_close - prev_close) / prev_close * 100
     env_diff_pct = (c_close - htf_lower_env) / htf_lower_env * 100
 
-    # 7) 1차 일반 매수 / 2차 극과매도 조건 판별 (09:05 이후부터 적용)
+    # 7) 1차 일반 매수 / 2차 극과매도 조건 판별 (09:05 ~ 15:15 적용)
     cond_env = c_low <= htf_lower_env
     cond_3h_rsi = htf_rsi_val <= RSI_OVERSOLD
     cond_5m_rsi = c_rsi_5m <= RSI_OVERSOLD
@@ -449,7 +474,6 @@ def main():
             new_alert_count = 1
 
         msg = build_market_report(
-            title=title,
             c_close=c_close,
             day_chg_pct=day_chg_pct,
             day_high=day_high,
@@ -461,32 +485,31 @@ def main():
             c_rsi_5m=c_rsi_5m,
             include_tech=True,
         )
-        print(msg)
-        send_alert(msg)
+        print(f"{title}\n\n{msg}")
+        send_alert(title, msg)
 
         if is_brief_time:
             new_brief_hour = now_kst.hour
 
-    elif is_brief_time:
-        # 8) 9시 장시작(미국장·환율 브리핑) / 10~14시 정각 점검 / 15시 장마감
+    elif is_brief_time or is_close_time:
+        # 8) 9시 장시작(미국장·환율 브리핑) / 10~14시 정각 점검 / 15:30 장마감
         if now_kst.hour == 9:
             title = f"[장시작 | 418660] ({latest_ts.strftime('%H:%M')})"
             msg = build_market_report(
-                title=title,
                 c_close=c_close,
                 day_chg_pct=day_chg_pct,
                 include_tech=False,
             )
         else:
-            brief_label = "장마감" if now_kst.hour == 15 else "정각 점검"
+            brief_label = "장마감" if is_close_time else "정각 점검"
             fng_text = get_fear_and_greed_text()
+            title = f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})"
             msg = (
-                f"[{brief_label} | 418660] ({latest_ts.strftime('%H:%M')})\n"
-                f"현재가: {c_close:,.0f}원 ({day_chg_pct:+.2f}%) ({data_status})\n"
+                f"현재가: {c_close:,.0f}원 ({fmt_pct(day_chg_pct)}) ({data_status})\n"
                 f"{fng_text}"
             )
-        print(msg)
-        send_alert(msg)
+        print(f"{title}\n\n{msg}")
+        send_alert(title, msg)
         new_brief_hour = now_kst.hour
 
     else:
@@ -506,10 +529,11 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         err_time = datetime.now(KST).strftime("%H:%M")
-        err_msg = f"[오류 점검 필요 | 418660] ({err_time})\n에러 내용: {e}"
-        print(err_msg)
+        err_title = f"[오류 점검 필요 | 418660] ({err_time})"
+        err_msg = f"에러 내용: {e}"
+        print(f"{err_title}\n\n{err_msg}")
         try:
-            send_alert(err_msg)
+            send_alert(err_title, err_msg)
         except Exception:
             pass
         raise
