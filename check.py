@@ -291,7 +291,6 @@ def build_market_report(
         top_section = f"현재가: {c_close:,.0f}원 ({fmt_pct(day_chg_pct)})\n"
 
     return (
-        f"──────────────\n"
         f"{top_section}"
         f"──────────────\n"
         f"{etf_ath_text}\n"
@@ -326,10 +325,10 @@ def main():
     today_kst_str = now_kst.strftime("%Y-%m-%d")
     hhmm = now_kst.hour * 100 + now_kst.minute
 
-    # 1) 전체 실행 시간 필터 (09:00 ~ 15:40)
+    # 1) 전체 실행 시간 필터 (09:00 ~ 15:35)
     if not TEST_MODE:
-        if not (900 <= hhmm <= 1540):
-            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:00~15:40) -> 패스")
+        if not (900 <= hhmm <= 1535):
+            print(f"[{now_kst.strftime('%H:%M')}] 거래 시간 외(09:00~15:35) -> 패스")
             return
 
     # 2) 당일 상태 로드 (매수 알림 횟수, 마지막 브리핑 시각)
@@ -345,10 +344,10 @@ def main():
     )
     is_close_time = (
         (now_kst.hour == 15)
-        and (30 <= now_kst.minute < 40)
+        and (25 <= now_kst.minute < 35)
         and (last_brief_hour != 15)
     )
-    is_signal_time = (905 <= hhmm <= 1515) or TEST_MODE
+    is_signal_time = (905 <= hhmm <= 1525) or TEST_MODE
 
     if not TEST_MODE and (not is_signal_time or alert_count >= 2) and not is_brief_time and not is_close_time:
         print(f"[{today_kst_str}] 시세 감시 대기/완료 & 브리핑 시간 아님 -> 패스")
@@ -358,7 +357,7 @@ def main():
     naver_data = get_naver_realtime(NAVER_CODE)
     if naver_data is not None:
         c_close, day_high, day_low, prev_close, market_status = naver_data
-        # 15:30 장마감 시간대에는 장 종료(CLOSE) 상태이므로 아래에서 당일 거래 유무 확인 후 발송
+        # 15:25 장마감 시간대에는 장상태와 무관하게 아래에서 당일 거래 유무 확인 후 발송
         if not TEST_MODE and market_status != "OPEN" and not is_close_time:
             if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
                 send_holiday_check(now_kst, today_kst_str, alert_count)
@@ -378,11 +377,11 @@ def main():
     else:
         df_5m.index = df_5m.index.tz_convert(KST)
 
-    # 15:30 장마감 시 휴장일 여부 최종 확인 (오늘 거래 데이터가 없으면 휴장일 -> 패스)
+    # 15:25 장마감 시 휴장일 여부 최종 확인 (오늘 거래 데이터가 없으면 휴장일 -> 패스)
     if not TEST_MODE and is_close_time:
         latest_trade_date = df_5m.index[-1].strftime("%Y-%m-%d")
         if latest_trade_date != today_kst_str:
-            print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 15:30 장마감 패스")
+            print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 15:25 장마감 패스")
             return
 
     # 5) 기본 3시간봉 생성
@@ -451,7 +450,7 @@ def main():
     day_chg_pct = (c_close - prev_close) / prev_close * 100
     env_diff_pct = (c_close - htf_lower_env) / htf_lower_env * 100
 
-    # 7) 1차 일반 매수 / 2차 극과매도 조건 판별 (09:05 ~ 15:15 적용)
+    # 7) 1차 일반 매수 / 2차 극과매도 조건 판별 (09:05 ~ 15:25 적용)
     cond_env = c_low <= htf_lower_env
     cond_3h_rsi = htf_rsi_val <= RSI_OVERSOLD
     cond_5m_rsi = c_rsi_5m <= RSI_OVERSOLD
@@ -488,11 +487,11 @@ def main():
         print(f"{title}\n\n{msg}")
         send_alert(title, msg)
 
-        if is_brief_time:
+        if is_brief_time or is_close_time:
             new_brief_hour = now_kst.hour
 
     elif is_brief_time or is_close_time:
-        # 8) 9시 장시작(미국장·환율 브리핑) / 10~14시 정각 점검 / 15:30 장마감
+        # 8) 9시 장시작(미국장·환율 브리핑) / 10~14시 정각 점검 / 15:25 장마감
         if now_kst.hour == 9:
             title = f"[장시작 | 418660] ({latest_ts.strftime('%H:%M')})"
             msg = build_market_report(
