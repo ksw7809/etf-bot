@@ -20,7 +20,7 @@ RSI_LEN = 14
 RSI_OVERSOLD = 35   # 1차 매수 기준 (3H & 5M RSI)
 RSI_EXTREME = 25    # 2차 극과매도 기준 (3H RSI)
 BRIEF_HOURS = {9, 10, 11, 12, 13, 14}  # 정각 점검 시간대 (9시 장시작, 10~14시 정각 점검)
-HOLIDAY_HOURS = {9, 12, 15}            # 휴장일 점검 시간대 (총 3회)
+HOLIDAY_HOURS = {12}                   # 평일 휴장일 점검 시간대 (낮 12시 1회)
 KST = ZoneInfo("Asia/Seoul")
 ALERT_FILE = "last_alert.txt"
 
@@ -106,6 +106,42 @@ def get_naver_realtime(code=NAVER_CODE):
     except Exception as e:
         print(f"네이버 실시간 조회 실패 (야후 데이터로 대체): {e}")
     return None
+
+
+def verify_market_data(naver_data=None, fetch_naver=True):
+    """휴장일·주말 점검용: 네이버 시세 + 야후 파이낸스 실제 조회 테스트"""
+    lines = []
+    all_ok = True
+
+    # 1) 네이버 시세 조회 점검
+    if naver_data is None and fetch_naver:
+        naver_data = get_naver_realtime(NAVER_CODE)
+
+    if naver_data is not None:
+        curr, _, _, _, ms = naver_data
+        lines.append(f"• 네이버 시세: 정상 ({curr:,.0f}원 / {ms})")
+    else:
+        all_ok = False
+        lines.append("• 네이버 시세: 실패")
+
+    # 2) 야후 파이낸스 조회 점검
+    try:
+        df_1d = yf.download(TICKER, period="5d", interval="1d", progress=False)
+        if isinstance(df_1d.columns, pd.MultiIndex):
+            df_1d.columns = df_1d.columns.get_level_values(0)
+        closes = df_1d["Close"].dropna()
+        if closes.empty:
+            all_ok = False
+            lines.append("• 야후 시세: 실패 (데이터 비어 있음)")
+        else:
+            last_close = float(closes.iloc[-1])
+            last_date = closes.index[-1].strftime("%Y-%m-%d")
+            lines.append(f"• 야후 시세: 정상 ({last_date} 종가 {last_close:,.0f}원)")
+    except Exception as e:
+        all_ok = False
+        lines.append(f"• 야후 시세: 실패 ({e})")
+
+    return all_ok, "\n".join(lines)
 
 
 def get_etf_ath_text(curr_price):
@@ -307,12 +343,34 @@ def build_market_report(
     )
 
 
-def send_holiday_check(now_kst, today_kst_str, alert_count, note=""):
-    suffix = f" ({note})" if note else ""
+def send_weekend_check(now_kst):
+    """주말 낮 12시 시스템점검 (네이버 + 야후 시세 실제 조회)"""
+    all_ok, detail = verify_market_data(fetch_naver=True)
+    status = "정상" if all_ok else "오류"
     fng_text = get_fear_and_greed_text()
-    title = f"[휴장일 점검 | 418660] ({now_kst.strftime('%H:%M')})"
+    title = f"[시스템점검({status}) | 418660] ({now_kst.strftime('%H:%M')})"
     msg = (
-        f"오늘은 증시 휴장일입니다. 봇 서버 정상 작동 중{suffix}\n"
+        f"주말 자동 시스템 점검 결과입니다.\n"
+        f"──────────────\n"
+        f"{detail}\n"
+        f"──────────────\n"
+        f"{fng_text}"
+    )
+    print(f"{title}\n\n{msg}")
+    send_alert(title, msg)
+
+
+def send_holiday_check(now_kst, today_kst_str, alert_count, naver_data=None):
+    """평일 휴장일 낮 12시 점검 (네이버 + 야후 시세 실제 조회)"""
+    all_ok, detail = verify_market_data(naver_data=naver_data, fetch_naver=False)
+    status = "정상" if all_ok else "오류"
+    fng_text = get_fear_and_greed_text()
+    title = f"[휴장일 점검({status}) | 418660] ({now_kst.strftime('%H:%M')})"
+    msg = (
+        f"오늘은 평일 증시 휴장일입니다.\n"
+        f"──────────────\n"
+        f"{detail}\n"
+        f"──────────────\n"
         f"{fng_text}"
     )
     print(f"{title}\n\n{msg}")
@@ -324,6 +382,11 @@ def main():
     now_kst = datetime.now(KST)
     today_kst_str = now_kst.strftime("%Y-%m-%d")
     hhmm = now_kst.hour * 100 + now_kst.minute
+
+    # 0) 주말 시스템 점검 (토·일 실행 시 시세 조회 점검 후 즉시 종료)
+    if not TEST_MODE and now_kst.weekday() >= 5:
+        send_weekend_check(now_kst)
+        return
 
     # 1) 전체 실행 시간 필터 (09:00 ~ 15:35)
     if not TEST_MODE:
@@ -359,8 +422,8 @@ def main():
         c_close, day_high, day_low, prev_close, market_status = naver_data
         # 15:25 장마감 시간대에는 장상태와 무관하게 아래에서 당일 거래 유무 확인 후 발송
         if not TEST_MODE and market_status != "OPEN" and not is_close_time:
-            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
-                send_holiday_check(now_kst, today_kst_str, alert_count)
+            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 15 and last_brief_hour != now_kst.hour:
+                send_holiday_check(now_kst, today_kst_str, alert_count, naver_data=naver_data)
             else:
                 print(f"[{now_kst.strftime('%H:%M')}] 휴장일 또는 장 마감 상태({market_status}) -> 패스")
             return
@@ -409,10 +472,10 @@ def main():
         latest_ts = df_5m.index[-1]
         today_str = latest_ts.strftime("%Y-%m-%d")
 
-        # 야후 백업 시에도 오늘 거래 데이터가 없으면 휴장일로 판단 (9, 12, 15시 점검 발송)
+        # 야후 백업 시에도 오늘 거래 데이터가 없으면 휴장일로 판단 (낮 12시 1회 점검 발송)
         if not TEST_MODE and today_str != today_kst_str:
-            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 10 and last_brief_hour != now_kst.hour:
-                send_holiday_check(now_kst, today_kst_str, alert_count, note="네이버 지연")
+            if now_kst.hour in HOLIDAY_HOURS and now_kst.minute < 15 and last_brief_hour != now_kst.hour:
+                send_holiday_check(now_kst, today_kst_str, alert_count, naver_data=None)
             else:
                 print(f"[{now_kst.strftime('%H:%M')}] 오늘({today_kst_str}) 거래 데이터 없음(휴장일) -> 패스")
             return
